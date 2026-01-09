@@ -1,0 +1,16 @@
+# Strategy Optimization Request
+I need help optimizing my trading strategy 'NQORB' on NQ=F.
+Current Backtest Performance:
+- Sharpe Ratio: 0.00
+- Total Return: 0.00%
+- Max Drawdown: 0.00%
+- Profit Factor: 0.00
+
+## Performance Issues:
+- The risk-adjusted return (Sharpe) is critically low.
+- The strategy has low expectancy (Profit Factor near 1.0).
+
+## Task:
+Please suggest filtering criteria or indicator modifications to improve this strategy.
+Focus specifically on how to avoid the losing trades identified above in their respective market regimes.
+Should I add a Volatility filter, change the Lookback period, or implement a dynamic Exit?

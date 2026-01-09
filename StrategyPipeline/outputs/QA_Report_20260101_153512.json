@@ -1,0 +1,61 @@
+{
+  "timestamp": "2026-01-01T15:35:11.983791",
+  "platform": "win32",
+  "python_version": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+  "checks": [
+    {
+      "category": "Environment",
+      "status": "PASS",
+      "message": "Library 'numpy' installed.",
+      "details": null
+    },
+    {
+      "category": "Environment",
+      "status": "PASS",
+      "message": "Library 'pandas' installed.",
+      "details": null
+    },
+    {
+      "category": "Environment",
+      "status": "PASS",
+      "message": "Library 'matplotlib' installed.",
+      "details": null
+    },
+    {
+      "category": "Environment",
+      "status": "WARNING",
+      "message": "Numba not found. CPU Backtests will be slow.",
+      "details": null
+    },
+    {
+      "category": "Hardware",
+      "status": "WARNING",
+      "message": "GPU Not Available. Falling back to CPU.",
+      "details": null
+    },
+    {
+      "category": "Hardware",
+      "status": "INFO",
+      "message": "GPU Error Details: cudaErrorInsufficientDriver: CUDA driver version is insufficient for CUDA runtime version",
+      "details": null
+    },
+    {
+      "category": "Data",
+      "status": "PASS",
+      "message": "Found 2 CSV files.",
+      "details": null
+    },
+    {
+      "category": "Data",
+      "status": "PASS",
+      "message": "File AAPL.csv schema valid.",
+      "details": null
+    },
+    {
+      "category": "Data",
+      "status": "PASS",
+      "message": "File SPY.csv schema valid.",
+      "details": null
+    }
+  ]
+}
