@@ -1,65 +1,42 @@
-# Python
+# Core Ignore Rules
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-.hypothesis/
-
-# Environments
 .env
 .venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# IDE
 .vscode/
 .idea/
 
-# Large files / Data
+# Artifacts & Data (Global)
+*.html
+*.csv
+*.png
+*.jpg
+*.db
+*.log
+*.txt
+!ES Trend.txt
+
+# Directories to Ignore
+data/
+logs/
+screenshots/
+cache/
+outputs/
+reports/
+gpu_env/
+StrategyPipeline/gpu_env/
+StrategyPipeline/cache/
+StrategyPipeline/outputs/
+StrategyPipeline/reports/
+StrategyPipeline/logs/
+StrategyPipeline/data/
+
+# Large Binaries
 *.exe
 *.dll
 *.iso
-A2API-*.csv
-data/
-StrategyPipeline/*.exe
 StrategyPipeline/cuda_setup.exe
 StrategyPipeline/nvidia_driver_setup.exe
-backtests.db
 
-# User specific
-screenshots/
-logs/
+# Ignore root-level scratchpad scripts (keep StrategyPipeline source)
+/*.py
