@@ -1,5 +1,16 @@
 //@version=5
-strategy("Triple NQ Variant [Trend + ORB + Short] % Scaling", overlay=true, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=33, currency=currency.USD, commission_type=strategy.commission.cash_per_contract, commission_value=2.05)
+strategy("Triple NQ Variant [Trend + ORB + Short] % Scaling", 
+     overlay=true, 
+     initial_capital=100000, 
+     default_qty_type=strategy.percent_of_equity, 
+     default_qty_value=33, 
+     currency=currency.USD, 
+     commission_type=strategy.commission.cash_per_contract, 
+     commission_value=2.05,
+     slippage=1,
+     backtest_fill_limits_assumption=1,
+     calc_on_every_tick=true)
+
 // ==========================================
 // 1. STRATEGY TOGGLES & GLOBAL SETTINGS
 // ==========================================
@@ -9,6 +20,7 @@ enable_s1    = input.bool(true,  "Enable Strat 1 (Trend NQ)", group=grpGlobal)
 enable_s2    = input.bool(true,  "Enable Strat 2 (Long ORB)", group=grpGlobal)
 enable_s3    = input.bool(true,  "Enable Strat 3 (Simple Short)", group=grpGlobal)
 enable_s4    = input.bool(true,  "Enable Strat 4 (Short ORB)", group=grpGlobal)
+enable_s5    = input.bool(true,  "Enable Strat 5 (Overnight)", group=grpGlobal)
 
 // Date Range
 startTime = input.time(timestamp("01 Jan 2011 00:00 +0000"), "Backtest Start", group=grpGlobal)
@@ -22,7 +34,7 @@ inDate = time >= startTime and time <= endTime
 grpPct = "2. Scaling & Position Sizing"
 useLimitEntries = input.bool(true, "Use Limit Entries (Fill at Close)?", group=grpPct, tooltip="If true, uses Limit Orders at Close price.")
 limitOffsetPts  = input.int(4,     "Limit Offset Tolerance (Pts)", minval=0, group=grpPct, tooltip="Willingness to pay up to X points slippage to get filled (Marketable Limit).")
-useLeverage = input.bool(true, "Use Leveraged (% Equity) Scaling?", group=grpPct)
+useLeverage = input.bool(false, "Use Leveraged (% Equity) Scaling?", group=grpPct)
 // Tier 1 = 33%
 pct_t1 = input.float(33.0, "Tier 1 (% Equity)", minval=1.0, maxval=100.0, step=1.0, group=grpPct)
 // Tier 2 = 66%
@@ -37,13 +49,13 @@ equityCapVal = input.float(1000000, "Max Equity to Compound ($)", group=grpRisk)
 
 useDdControl   = input.bool(true, "Enable Drawdown Control Logic?", group=grpRisk)
 // Tier A: Caution
-ddLimitA       = input.float(5.0,  "Tier 1 (Caution) DD %", group=grpRisk)
+ddLimitA       = input.float(15.0, "Tier 1 (Caution) DD %", group=grpRisk)
 ddFactorA      = input.float(0.75, "Tier 1 Reduction (0.75)", group=grpRisk)
 // Tier B: Defense
-ddLimitB       = input.float(12.0, "Tier 2 (Defense) DD %", group=grpRisk)
+ddLimitB       = input.float(20.0, "Tier 2 (Defense) DD %", group=grpRisk)
 ddFactorB      = input.float(0.50, "Tier 2 Reduction (0.50)", group=grpRisk)
 // Tier C: Survival
-ddLimitC       = input.float(20.0, "Tier 3 (Survival) DD %", group=grpRisk)
+ddLimitC       = input.float(25.0, "Tier 3 (Survival) DD %", group=grpRisk)
 ddFactorC      = input.float(0.25, "Tier 3 Reduction (0.25)", group=grpRisk)
 
 // Track High Water Mark
@@ -93,7 +105,7 @@ int orbEndHour      = 9
 int orbEndMin       = 45
 // Stop Loss Options
 string slTypeOrb    = "Range Low"
-float fixedSLOrb    = 0.75
+fixedSLOrb    = 0.75
 // Filters
 bool useGreenRange  = true
 // Entry Mode
@@ -167,6 +179,30 @@ float so_mom_t2       = 25.0
 float so_vwap_t3      = 0.3
 float so_vwap_t2      = 0.6
 
+// STRATEGY 5: OVERNIGHT DRIFT (HARDCODED)
+ov_useTrend  = true
+ov_lenTrend  = 200
+ov_skipThu   = false
+ov_startYear = 2010
+ov_qty1      = 1
+ov_qty2      = 1
+ov_qty3      = 2
+ov_scaleMeth = "Low Volatility"
+ov_vol_t3    = 1.0
+ov_vol_t2    = 2.0
+ov_mom_t3    = 2.5
+ov_mom_t2    = 1.5
+ov_vwap_t3   = 0.3
+ov_vwap_t2   = 0.6
+ov_slPct     = 2.0
+ov_tpPct     = 2.0
+ov_useVol    = false
+ov_maxAtrPct = 1.0
+ov_entryH    = 18
+ov_entryM    = 05
+ov_exitH     = 09
+ov_exitM     = 30
+
 // ==========================================
 // 7. INDICATORS & COMMON LOGIC
 // ==========================================
@@ -184,10 +220,17 @@ momVal = ta.mom(close, momLen)
 [plusDI, minusDI, adxVal] = ta.dmi(adxLen, adxLen)
 vixVal = request.security("CBOE:VIX", "D", close[1], lookahead=barmerge.lookahead_on)
 
+// Overnight Specific Indicators
+ov_dailyAtr   = request.security(syminfo.tickerid, "D", ta.atr(14))
+ov_dailyClose = request.security(syminfo.tickerid, "D", close)
+ov_atrPct     = (ov_dailyAtr / ov_dailyClose) * 100
+ov_emaDaily   = request.security(syminfo.tickerid, "D", ta.ema(close, ov_lenTrend))
+
 // Metrics for Logic/Scaling
 distToVWAP = math.abs(close - vwapVal)
-atrPct = (atrVal / close) * 100
-distInATR = distToVWAP / atrVal
+atrPct = (atrVal / close) * 100 // Intraday ATR%
+distInATR = distToVWAP / atrVal // Intraday Dist
+ov_distInATR = distToVWAP / ov_dailyAtr // Overnight Dist (using Daily ATR)
 
 // ==========================================
 // VISUALS: GLOBAL TRACKERS
@@ -230,7 +273,35 @@ calcTier(use, method, vol_t3, vol_t2, mom_t3, mom_t2, vwap_t3, vwap_t2, isShort)
                     t := 2
     t
 
-// Calculate Tier for each
+// Overnight Tier Calc
+calcTierOvernight(use, method, vol_t3, vol_t2, mom_t3, mom_t2, vwap_t3, vwap_t2) =>
+    int t = 1
+    if method == "Low Volatility"
+        if ov_atrPct < vol_t3
+            t := 3
+        else if ov_atrPct < vol_t2
+            t := 2
+    else if method == "VWAP Proximity"
+        if ov_distInATR < vwap_t3
+            t := 3
+        else if ov_distInATR < vwap_t2
+            t := 2
+    else if method == "Momentum"
+        if math.abs(momVal) >= mom_t3
+            t := 3
+        else if math.abs(momVal) >= mom_t2
+            t := 2
+    t
+
+// Calculate Overnight Tier/Qty
+tierOvernight = calcTierOvernight(true, ov_scaleMeth, ov_vol_t3, ov_vol_t2, ov_mom_t3, ov_mom_t2, ov_vwap_t3, ov_vwap_t2)
+int qtyOvernight = ov_qty1
+if tierOvernight == 2
+    qtyOvernight := ov_qty2
+else if tierOvernight == 3
+    qtyOvernight := ov_qty3
+
+// Calculate Tier for each (Existing)
 tierLongTrend  = calcTier(l_useScale, l_scaleMethod, l_vol_t3, l_vol_t2, l_mom_t3, l_mom_t2, l_vwap_t3, l_vwap_t2, false)
 tierLongORB    = calcTier(o_useScale, o_scaleMethod, o_vol_t3, o_vol_t2, o_mom_t3, o_mom_t2, o_vwap_t3, o_vwap_t2, false)
 tierShort      = calcTier(s_useScale, s_scaleMethod, s_vol_t3, s_vol_t2, s_mom_t3, s_mom_t2, s_vwap_t3, s_vwap_t2, true)
@@ -288,26 +359,15 @@ qtyShort     = calcQtyFromTier(tierShort)
 qtyShortOrb  = calcQtyFromTier(tierShortOrb)
 
 // HELPER: Generate Trade Info for Labels and Webhooks
-// Returns a tuple: [Label Text, JSON Alert String]
 getTradeInfo(name, qty, tier, isLev) =>
-    // Calculate Exact Equity %
     float tradeVal = qty * close
     float exactPct = (tradeVal / strategy.equity) * 100
-    
-    // Label Text
-    string lbl = name + "\nQty: " + str.tostring(qty)
-    if isLev
-        lbl := lbl + "\n(" + str.tostring(exactPct, "#.1") + "% Eq)"
-    else
-        lbl := lbl + "\n(Tier " + str.tostring(tier) + ")"
-    
-    // Alert JSON String for Webhook
-    // { "strat": "Trend", "qty": 5, "tier": 2, "eq_pct": 12.5, "price": 15000 }
+    string lbl = name + "\nQty: " + str.tostring(qty) + "\n(" + str.tostring(exactPct, "#.1") + "% Eq)"
+    if not isLev
+        lbl := lbl + "\nTier " + str.tostring(tier)
     string json = "{\"strat\":\"" + name + "\",\"qty\":" + str.tostring(qty) + ",\"tier\":" + str.tostring(tier) + ",\"eq_pct\":" + str.tostring(exactPct, "#.2") + ",\"price\":" + str.tostring(close) + "}"
-    
     [lbl, json]
 
-// Helper to Draw Label
 drawLabel(txt) =>
     label.new(bar_index, high, text=txt, style=label.style_label_down, color=color.white, textcolor=color.black, size=size.small)
 
@@ -320,15 +380,14 @@ if isNewDay
 if strategy.position_size != 0 and strategy.position_size[1] == 0
     tradesToday += 1
 
-// Global Condition Flags (Fix Scope for Plotting)
 var bool orbLongCond = false
 var bool shortOrbCond = false
-// Reset flags on new bar
+var bool ovLongCond = false
 orbLongCond := false
 shortOrbCond := false
+ovLongCond := false
 
 canTrade = inDate and strategy.position_size == 0 and (not limitOneTradePerDay or tradesToday == 0)
-
 float limitPriceLong = useLimitEntries ? (close + limitOffsetPts) : na
 float limitPriceShort = useLimitEntries ? (close - limitOffsetPts) : na
 
@@ -345,7 +404,6 @@ if trendLongCond
     strategy.entry("Long Trend", strategy.long, qty=qtyLongTrend, limit=limitPriceLong, comment="Trend (T" + str.tostring(tierLongTrend) + ")", alert_message=valAl)
 
 // --- B. LONG ORB ---
-// Logic: Range High/Low
 var float orbRangeHigh = 0.0
 var float orbRangeLow = 0.0
 var float orbRangeOpen = 0.0
@@ -357,10 +415,8 @@ if isNewDay
     orbRangeOpen := 0.0
     orbRangeClose := 0.0
     orbRangeFormed := false
-
 orbStart = orbStartHour * 100 + orbStartMin
 orbEnd = orbEndHour * 100 + orbEndMin
-
 if t_val == orbStart
     orbRangeOpen := open
 if t_val >= orbStart and t_val < orbEnd
@@ -372,16 +428,9 @@ if t_val == orbEnd
     orbRangeClose := close[1]
 if t_val >= orbEnd and not orbRangeFormed and orbRangeHigh > 0
     orbRangeFormed := true
-
-orbBreakout = false
-if orbEntryMode == "Close"
-    orbBreakout := orbRangeFormed and close > orbRangeHigh
-else
-    orbBreakout := orbRangeFormed and high > orbRangeHigh
-
+orbBreakout = orbEntryMode == "Close" ? orbRangeFormed and close > orbRangeHigh : orbRangeFormed and high > orbRangeHigh
 orbGreenRangeOK = not useGreenRange or (orbRangeClose > orbRangeOpen)
-orbCancelVal = orbCancelHour * 100 + orbCancelMin
-orbTimeOK = t_val < orbCancelVal
+orbTimeOK = t_val < (orbCancelHour * 100 + orbCancelMin)
 
 if enable_s2 and canTrade and orbTimeOK and orbGreenRangeOK and (t_val >= orbEnd)
     [valLb, valAl] = getTradeInfo("L-ORB", qtyLongORB, tierLongORB, useLeverage)
@@ -396,18 +445,16 @@ if enable_s2 and canTrade and orbTimeOK and orbGreenRangeOK and (t_val >= orbEnd
             strategy.entry("Long ORB", strategy.long, qty=qtyLongORB, stop=orbRangeHigh, limit=limitPriceLong, comment="L-ORB (T" + str.tostring(tierLongORB) + ")", alert_message=valAl)
             orbLongCond := true
 
-// --- C. SIMPLE SHORT (Primary) ---
+// --- C. SIMPLE SHORT ---
 shortStartVal = shortStartHour * 100 + shortStartMin
 shortEndVal = shortEndHour * 100 + shortEndMin
 inShortLogic = t_val >= shortStartVal and t_val < shortEndVal and close < vwapVal and rsiVal < rsi_thresh and (not use_vix or vixVal < vix_max)
-simpleShortCond = enable_s3 and canTrade and inShortLogic
-
-if simpleShortCond
+if enable_s3 and canTrade and inShortLogic
     [valLb, valAl] = getTradeInfo("Short", qtyShort, tierShort, useLeverage)
     drawLabel(valLb)
     strategy.entry("Short", strategy.short, qty=qtyShort, limit=limitPriceShort, comment="Short (T" + str.tostring(tierShort) + ")", alert_message=valAl)
 
-// --- D. SHORT ORB (Secondary) ---
+// --- D. SHORT ORB ---
 var float so_rangeHigh = 0.0
 var float so_rangeLow = 0.0
 var float so_rangeOpen = 0.0
@@ -421,7 +468,6 @@ if isNewDay
     so_rangeFormed := false
 so_orbStart = so_orbStartHour * 100 + so_orbStartMin
 so_orbEnd = so_orbEndHour * 100 + so_orbEndMin
-
 if t_val == so_orbStart
     so_rangeOpen := open
 if t_val >= so_orbStart and t_val < so_orbEnd
@@ -433,19 +479,12 @@ if t_val == so_orbEnd
     so_rangeClose := close[1]
 if t_val >= so_orbEnd and not so_rangeFormed and so_rangeHigh > 0
     so_rangeFormed := true
-
-so_breakout = false
-if so_entryMode == "Close"
-    so_breakout := so_rangeFormed and close < so_rangeLow
-else
-    so_breakout := so_rangeFormed and low < so_rangeLow
-
+so_breakout = so_entryMode == "Close" ? so_rangeFormed and close < so_rangeLow : so_rangeFormed and low < so_rangeLow
 so_vwapOK = not so_useVwapFilter or (close < vwapVal)
 so_redRangeOK = not so_useRedRange or (so_rangeClose < so_rangeOpen)
-so_cancelVal = so_cancelHour * 100 + so_cancelMin
-so_timeOK = t_val < so_cancelVal
+so_timeOK = t_val < (so_cancelHour * 100 + so_cancelMin)
 
-if enable_s4 and canTrade and so_timeOK and so_redRangeOK and (t_val >= so_orbEnd) and (not simpleShortCond)
+if enable_s4 and canTrade and so_timeOK and so_redRangeOK and (t_val >= so_orbEnd)
     [valLb, valAl] = getTradeInfo("S-ORB", qtyShortOrb, tierShortOrb, useLeverage)
     if so_entryMode == "Close"
         if so_breakout and so_vwapOK
@@ -453,38 +492,45 @@ if enable_s4 and canTrade and so_timeOK and so_redRangeOK and (t_val >= so_orbEn
             strategy.entry("Short ORB", strategy.short, qty=qtyShortOrb, limit=limitPriceShort, comment="S-ORB (T" + str.tostring(tierShortOrb) + ")", alert_message=valAl)
             shortOrbCond := true
     else
-        // LOW / STOP logic
         if (close < vwapVal)
             drawLabel(valLb)
             strategy.entry("Short ORB", strategy.short, qty=qtyShortOrb, stop=so_rangeLow, limit=limitPriceShort, comment="S-ORB (T" + str.tostring(tierShortOrb) + ")", alert_message=valAl)
             shortOrbCond := true
 
+// --- E. OVERNIGHT DRIFT ---
+ov_inDate   = year >= ov_startYear
+ovEntryTime = (nyHour == ov_entryH and nyMin == ov_entryM)
+ov_trendOk = not ov_useTrend or close > ov_emaDaily
+ov_dayOk   = not ov_skipThu or dayofweek != dayofweek.thursday
+ov_volOk   = not ov_useVol or ov_atrPct < ov_maxAtrPct
+
+if enable_s5 and canTrade and ovEntryTime and ov_inDate
+    if ov_trendOk and ov_dayOk and ov_volOk
+        string ov_comment = "Drift (T" + str.tostring(tierOvernight) + ")"
+        float slPriceOv = close * (1 - ov_slPct / 100)
+        float tpPriceOv = close * (1 + ov_tpPct / 100)
+        [ovLb, ovAl] = getTradeInfo("Drift", qtyOvernight, tierOvernight, false)
+        drawLabel(ovLb)
+        strategy.entry("Overnight", strategy.long, qty=qtyOvernight, comment=ov_comment, alert_message=ovAl)
+        strategy.exit("Bracket Ov", "Overnight", stop=slPriceOv, limit=tpPriceOv)
+        ovLongCond := true
+
 // ==========================================
 // 10. EXITS
 // ==========================================
-// Trend Exits
 if strategy.opentrades.entry_id(strategy.opentrades - 1) == "Long Trend"
     if barstate.isconfirmed and close < (vwapVal - trendExitBuffer)
         strategy.close("Long Trend", comment="Trend Break")
 
-// Long ORB Exits
 if strategy.opentrades.entry_id(strategy.opentrades - 1) == "Long ORB"
-    float slP = 0.0
-    float entryP = strategy.opentrades.entry_price(strategy.opentrades - 1)
-    if slTypeOrb == "Fixed %"
-        slP := entryP * (1 - fixedSLOrb/100)
-    else
-        slP := orbRangeLow < entryP ? orbRangeLow : entryP * 0.99
-    
+    float slP = slTypeOrb == "Fixed %" ? (strategy.opentrades.entry_price(strategy.opentrades - 1) * (1 - fixedSLOrb/100)) : (orbRangeLow < strategy.opentrades.entry_price(strategy.opentrades - 1) ? orbRangeLow : strategy.opentrades.entry_price(strategy.opentrades - 1) * 0.99)
     plotSL := slP 
     strategy.exit("Exit ORB", "Long ORB", stop=slP)
 
-// Simple Short Exits
 if strategy.opentrades.entry_id(strategy.opentrades - 1) == "Short"
     float entryP = strategy.opentrades.entry_price(strategy.opentrades - 1)
     if use_trail_short
-        float trailQty = entryP * (trail_pct_short / 100)
-        float trailTicksVal = trailQty / syminfo.mintick
+        float trailTicksVal = (entryP * (trail_pct_short / 100)) / syminfo.mintick
         plotSL := entryP * (1 + sl_pct_short) 
         strategy.exit("Exit Short", "Short", stop=entryP * (1 + sl_pct_short), trail_points=trailTicksVal, trail_offset=trailTicksVal)
     else
@@ -493,20 +539,18 @@ if strategy.opentrades.entry_id(strategy.opentrades - 1) == "Short"
     if use_vwap_exit_short and close > vwapVal
         strategy.close("Short", comment="VWAP Exit")
 
-// Short ORB Exits (NEW)
 if strategy.opentrades.entry_id(strategy.opentrades - 1) == "Short ORB"
-    float slPrice = 0.0
     float entryP = strategy.opentrades.entry_price(strategy.opentrades - 1)
-    if so_slType == "Fixed %"
-        slPrice := entryP * (1 + so_fixedSL/100)
-    else
-        slPrice := so_rangeHigh > entryP ? so_rangeHigh : entryP * 1.01
+    float slPrice = so_slType == "Fixed %" ? (entryP * (1 + so_fixedSL/100)) : (so_rangeHigh > entryP ? so_rangeHigh : entryP * 1.01)
     plotSL := slPrice 
     strategy.exit("Exit Short ORB", "Short ORB", stop=slPrice)
 
-// EOD
-isExitTime = (nyHour == trendExitHour and nyMin == trendExitMin)
-if isExitTime
+if strategy.opentrades.entry_id(strategy.opentrades - 1) == "Overnight"
+    if (nyHour == ov_exitH and nyMin == ov_exitM)
+        strategy.close("Overnight", comment="AM Exit")
+        strategy.cancel("Bracket Ov")
+
+if (nyHour == trendExitHour and nyMin == trendExitMin) and not (strategy.opentrades.entry_id(strategy.opentrades - 1) == "Overnight")
     strategy.close_all(comment="EOD")
 if strategy.opentrades.entry_id(strategy.opentrades - 1) == "Short ORB" and t_val >= 1555
     strategy.close("Short ORB", comment="EOD ShortOrb")
@@ -519,11 +563,7 @@ plot(orbRangeFormed ? orbRangeHigh : na, "L-ORB High", color.green, 1, plot.styl
 plot(orbRangeFormed ? orbRangeLow : na, "L-ORB Low", color.red, 1, plot.style_linebr)
 plot(so_rangeFormed ? so_rangeHigh : na, "S-ORB High", color.maroon, 1, plot.style_linebr)
 plot(so_rangeFormed ? so_rangeLow : na, "S-ORB Low", color.navy, 1, plot.style_linebr)
-
 plotshape(trendLongCond, "Trend Entry", shape.triangleup, location.belowbar, color.blue, size=size.small)
 plotshape(orbLongCond, "ORB Entry", shape.arrowup, location.belowbar, color.lime, size=size.small)
-plotshape(simpleShortCond, "Short Entry", shape.triangledown, location.abovebar, color.red, size=size.small)
-plotshape(shortOrbCond, "S-ORB Entry", shape.arrowdown, location.abovebar, color.purple, size=size.small)
-
-// 12. ENHANCED VISUALS
+plotshape(ovLongCond, "Drift Entry", shape.diamond, location.belowbar, color.white, size=size.small)
 plot(strategy.position_size != 0 ? plotSL : na, "Dynamic Stop Loss", color=color.yellow, style=plot.style_linebr, linewidth=2)
