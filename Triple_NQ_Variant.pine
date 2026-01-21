@@ -21,9 +21,10 @@ enable_s2    = input.bool(true,  "Enable Strat 2 (Long ORB)", group=grpGlobal)
 enable_s3    = input.bool(true,  "Enable Strat 3 (Simple Short)", group=grpGlobal)
 enable_s4    = input.bool(true,  "Enable Strat 4 (Short ORB)", group=grpGlobal)
 enable_s5    = input.bool(true,  "Enable Strat 5 (Overnight)", group=grpGlobal)
+enable_s6    = input.bool(true,  "Enable Strat 6 (Universal Trend)", group=grpGlobal)
 
 // Date Range
-startTime = input.time(timestamp("01 Jan 2011 00:00 +0000"), "Backtest Start", group=grpGlobal)
+startTime = input.time(timestamp("31 Dec 2010 19:00 +0000"), "Backtest Start", group=grpGlobal)
 endTime = input.time(timestamp("01 Jan 2030 00:00 +0000"), "Backtest End", group=grpGlobal)
 limitOneTradePerDay = input.bool(false, "Limit to 1 Trade Per Day?", group=grpGlobal)
 inDate = time >= startTime and time <= endTime
@@ -49,13 +50,13 @@ equityCapVal = input.float(1000000, "Max Equity to Compound ($)", group=grpRisk)
 
 useDdControl   = input.bool(true, "Enable Drawdown Control Logic?", group=grpRisk)
 // Tier A: Caution
-ddLimitA       = input.float(15.0, "Tier 1 (Caution) DD %", group=grpRisk)
+ddLimitA       = input.float(5.0,  "Tier 1 (Caution) DD %", group=grpRisk)
 ddFactorA      = input.float(0.75, "Tier 1 Reduction (0.75)", group=grpRisk)
 // Tier B: Defense
-ddLimitB       = input.float(20.0, "Tier 2 (Defense) DD %", group=grpRisk)
+ddLimitB       = input.float(10.0, "Tier 2 (Defense) DD %", group=grpRisk)
 ddFactorB      = input.float(0.50, "Tier 2 Reduction (0.50)", group=grpRisk)
 // Tier C: Survival
-ddLimitC       = input.float(25.0, "Tier 3 (Survival) DD %", group=grpRisk)
+ddLimitC       = input.float(15.0, "Tier 3 (Survival) DD %", group=grpRisk)
 ddFactorC      = input.float(0.25, "Tier 3 Reduction (0.25)", group=grpRisk)
 
 // Track High Water Mark
@@ -150,6 +151,7 @@ float s_mom_t2      = 20.0
 float s_vwap_t3     = 0.3
 float s_vwap_t2     = 0.6
 
+
 // ==========================================
 // 6. STRATEGY 4: SHORT ORB
 // ==========================================
@@ -179,7 +181,9 @@ float so_mom_t2       = 25.0
 float so_vwap_t3      = 0.3
 float so_vwap_t2      = 0.6
 
-// STRATEGY 5: OVERNIGHT DRIFT (HARDCODED)
+// ==========================================
+// 7. STRATEGY 5: OVERNIGHT DRIFT
+// ==========================================
 ov_useTrend  = true
 ov_lenTrend  = 200
 ov_skipThu   = false
@@ -204,6 +208,31 @@ ov_exitH     = 09
 ov_exitM     = 30
 
 // ==========================================
+// 8. STRATEGY 6: UNIVERSAL TREND EDGE
+// ==========================================
+// ==========================================
+// 8. STRATEGY 6: UNIVERSAL TREND EDGE (HARDCODED)
+// ==========================================
+u_startHour     = 9
+u_startMin      = 45
+u_endHour       = 15
+u_endMin        = 55
+u_lookbackHurst = 250
+u_threshHurst   = 0.65
+u_lenBand       = 250
+u_multBand      = 1.0
+u_slAtrMult     = 2.0
+u_tpAtrMult     = 6.0
+u_useScale      = true
+u_scaleMethod   = "Low Volatility"
+u_vol_t3        = 0.1
+u_vol_t2        = 0.25
+u_momLen        = 14
+u_mom_t3        = 50.0
+u_mom_t2        = 25.0
+
+
+// ==========================================
 // 7. INDICATORS & COMMON LOGIC
 // ==========================================
 // Time
@@ -226,11 +255,33 @@ ov_dailyClose = request.security(syminfo.tickerid, "D", close)
 ov_atrPct     = (ov_dailyAtr / ov_dailyClose) * 100
 ov_emaDaily   = request.security(syminfo.tickerid, "D", ta.ema(close, ov_lenTrend))
 
+// Universal Trend Specific Indicators (Manual VWAP to avoid lookahead)
+var float u_vwapSum = 0.0
+var float u_volSum = 0.0
+if isNewDay
+    u_vwapSum := 0.0
+    u_volSum := 0.0
+u_vwapSum += (hlc3 * volume)
+u_volSum += volume
+u_dailyVwap = (u_volSum != 0) ? (u_vwapSum / u_volSum) : hlc3
+// Bands
+u_bandDev   = ta.stdev(close, u_lenBand)
+u_upperBand = u_dailyVwap + (u_multBand * u_bandDev)
+u_lowerBand = u_dailyVwap - (u_multBand * u_bandDev)
+// Regime (Efficiency Ratio)
+calc_er(len) =>
+    change = math.abs(close - close[len])
+    sum_abs_change = math.sum(math.abs(close - close[1]), len)
+    er = (sum_abs_change != 0) ? (change / sum_abs_change) : 0.5
+    er
+u_regimeVal = calc_er(20)
+
 // Metrics for Logic/Scaling
 distToVWAP = math.abs(close - vwapVal)
 atrPct = (atrVal / close) * 100 // Intraday ATR%
 distInATR = distToVWAP / atrVal // Intraday Dist
 ov_distInATR = distToVWAP / ov_dailyAtr // Overnight Dist (using Daily ATR)
+u_momPoints = math.abs(close - close[u_lenBand]) // For Universal Momentum Scaling logic check (if different from generic momVal)
 
 // ==========================================
 // VISUALS: GLOBAL TRACKERS
@@ -246,7 +297,7 @@ else
 // ==========================================
 // 8. SCALING CALCULATORS (TIER ONLY)
 // ==========================================
-calcTier(use, method, vol_t3, vol_t2, mom_t3, mom_t2, vwap_t3, vwap_t2, isShort) =>
+calcTier(use, method, vol_t3, vol_t2, mom_t3, mom_t2, vwap_t3, vwap_t2, isShort, customMom) =>
     int t = 1
     if use
         if method == "Low Volatility"
@@ -260,17 +311,26 @@ calcTier(use, method, vol_t3, vol_t2, mom_t3, mom_t2, vwap_t3, vwap_t2, isShort)
             else if distInATR < vwap_t2
                 t := 2
         else if method == "Momentum"
+            float mVal = customMom != 0 ? customMom : momVal
             if isShort // Short uses RSI
                 if rsiVal < mom_t3
                     t := 3
                 else if rsiVal < mom_t2
                     t := 2
-            else // Long uses Mom Val
-                float baseMom = 10.0 
-                if math.abs(momVal) >= baseMom * mom_t3
-                    t := 3
-                else if math.abs(momVal) >= baseMom * mom_t2
-                    t := 2
+            else // Long uses Mom Val (Ratio or Points)
+                // For main strategy it uses Ratio (BaseMom * thresh). For Univ it uses Points (thresh).
+                // Heuristic: If threshold > 5, assume Points logic. If < 5, assume Ratio logic.
+                if mom_t3 > 5.0
+                    if math.abs(mVal) >= mom_t3
+                        t := 3
+                    else if math.abs(mVal) >= mom_t2
+                        t := 2
+                else
+                    float baseMom = 10.0 
+                    if math.abs(mVal) >= baseMom * mom_t3
+                        t := 3
+                    else if math.abs(mVal) >= baseMom * mom_t2
+                        t := 2
     t
 
 // Overnight Tier Calc
@@ -302,10 +362,15 @@ else if tierOvernight == 3
     qtyOvernight := ov_qty3
 
 // Calculate Tier for each (Existing)
-tierLongTrend  = calcTier(l_useScale, l_scaleMethod, l_vol_t3, l_vol_t2, l_mom_t3, l_mom_t2, l_vwap_t3, l_vwap_t2, false)
-tierLongORB    = calcTier(o_useScale, o_scaleMethod, o_vol_t3, o_vol_t2, o_mom_t3, o_mom_t2, o_vwap_t3, o_vwap_t2, false)
-tierShort      = calcTier(s_useScale, s_scaleMethod, s_vol_t3, s_vol_t2, s_mom_t3, s_mom_t2, s_vwap_t3, s_vwap_t2, true)
-tierShortOrb   = calcTier(so_useScale, so_scaleMethod, so_vol_t3, so_vol_t2, so_mom_t3, so_mom_t2, so_vwap_t3, so_vwap_t2, true)
+// Calculate Tier for each (Existing)
+// Calculate Tier for each (Existing)
+tierLongTrend  = calcTier(l_useScale, l_scaleMethod, l_vol_t3, l_vol_t2, l_mom_t3, l_mom_t2, l_vwap_t3, l_vwap_t2, false, 0)
+tierLongORB    = calcTier(o_useScale, o_scaleMethod, o_vol_t3, o_vol_t2, o_mom_t3, o_mom_t2, o_vwap_t3, o_vwap_t2, false, 0)
+tierShort      = calcTier(s_useScale, s_scaleMethod, s_vol_t3, s_vol_t2, s_mom_t3, s_mom_t2, s_vwap_t3, s_vwap_t2, true, 0)
+tierShortOrb   = calcTier(so_useScale, so_scaleMethod, so_vol_t3, so_vol_t2, so_mom_t3, so_mom_t2, so_vwap_t3, so_vwap_t2, true, 0)
+// Universal Specific Momentum
+u_momVal = ta.mom(close, u_momLen) // Using Strategy 6 specific length input
+tierUniv       = calcTier(u_useScale, u_scaleMethod, u_vol_t3, u_vol_t2, u_mom_t3, u_mom_t2, 0.0, 0.0, false, u_momVal)
 
 calcQtyFromTier(tier) =>
     float q = 0.0
@@ -357,6 +422,7 @@ qtyLongTrend = calcQtyFromTier(tierLongTrend)
 qtyLongORB   = calcQtyFromTier(tierLongORB)
 qtyShort     = calcQtyFromTier(tierShort)
 qtyShortOrb  = calcQtyFromTier(tierShortOrb)
+qtyUniv      = calcQtyFromTier(tierUniv)
 
 // HELPER: Generate Trade Info for Labels and Webhooks
 getTradeInfo(name, qty, tier, isLev) =>
@@ -516,6 +582,35 @@ if enable_s5 and canTrade and ovEntryTime and ov_inDate
         ovLongCond := true
 
 // ==========================================
+// 10. STRATEGY 6: UNIVERSAL TREND EDGE
+// ==========================================
+var float u_tradeSL = na
+var float u_tradeTP = na
+u_startVal = u_startHour * 100 + u_startMin
+u_endVal   = u_endHour * 100 + u_endMin
+u_inSession = inDate and (t_val >= u_startVal) and (t_val < u_endVal)
+u_isConfirmed = barstate.isconfirmed // Strict Entry
+
+u_longTrigger  = (close > u_upperBand) and (close > open) and (u_regimeVal > u_threshHurst) and (close > u_dailyVwap)
+u_shortTrigger = (close < u_lowerBand) and (close < open) and (u_regimeVal > u_threshHurst) and (close < u_dailyVwap)
+
+if enable_s6 and canTrade and u_inSession and u_isConfirmed
+    if u_longTrigger
+        // Enter Long
+        [uLb, uAl] = getTradeInfo("Univ-L", qtyUniv, tierUniv, false)
+        drawLabel(uLb)
+        strategy.entry("Univ Long", strategy.long, qty=qtyUniv, comment="Univ-L (T" + str.tostring(tierUniv) + ")", alert_message=uAl)
+        u_tradeSL := close - (u_slAtrMult * atrVal)
+        u_tradeTP := close + (u_tpAtrMult * atrVal)
+    else if u_shortTrigger
+        // Enter Short
+        [uLb, uAl] = getTradeInfo("Univ-S", qtyUniv, tierUniv, false)
+        drawLabel(uLb)
+        strategy.entry("Univ Short", strategy.short, qty=qtyUniv, comment="Univ-S (T" + str.tostring(tierUniv) + ")", alert_message=uAl)
+        u_tradeSL := close + (u_slAtrMult * atrVal)
+        u_tradeTP := close - (u_tpAtrMult * atrVal)
+
+// ==========================================
 // 10. EXITS
 // ==========================================
 if strategy.opentrades.entry_id(strategy.opentrades - 1) == "Long Trend"
@@ -550,10 +645,20 @@ if strategy.opentrades.entry_id(strategy.opentrades - 1) == "Overnight"
         strategy.close("Overnight", comment="AM Exit")
         strategy.cancel("Bracket Ov")
 
+if strategy.opentrades.entry_id(strategy.opentrades - 1) == "Univ Long"
+    strategy.exit("Exit Univ L", "Univ Long", stop=u_tradeSL, limit=u_tradeTP)
+
+if strategy.opentrades.entry_id(strategy.opentrades - 1) == "Univ Short"
+    strategy.exit("Exit Univ S", "Univ Short", stop=u_tradeSL, limit=u_tradeTP)
+
+// EOD FORCE CLOSES
 if (nyHour == trendExitHour and nyMin == trendExitMin) and not (strategy.opentrades.entry_id(strategy.opentrades - 1) == "Overnight")
     strategy.close_all(comment="EOD")
 if strategy.opentrades.entry_id(strategy.opentrades - 1) == "Short ORB" and t_val >= 1555
     strategy.close("Short ORB", comment="EOD ShortOrb")
+if (strategy.opentrades.entry_id(strategy.opentrades - 1) == "Univ Long" or strategy.opentrades.entry_id(strategy.opentrades - 1) == "Univ Short") and t_val >= 1555
+    strategy.close("Univ Long", comment="EOD Univ")
+    strategy.close("Univ Short", comment="EOD Univ")
 
 // ==========================================
 // 11. PLOTS
