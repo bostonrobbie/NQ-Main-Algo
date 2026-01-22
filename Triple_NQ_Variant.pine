@@ -9,7 +9,8 @@ strategy("Triple NQ Variant [Trend + ORB + Short] % Scaling",
      commission_value=2.05,
      slippage=1,
      backtest_fill_limits_assumption=1,
-     calc_on_every_tick=true)
+     calc_on_every_tick=false,
+     calc_on_order_fills=true)
 
 // ==========================================
 // 1. STRATEGY TOGGLES & GLOBAL SETTINGS
@@ -250,10 +251,12 @@ momVal = ta.mom(close, momLen)
 vixVal = request.security("CBOE:VIX", "D", close[1], lookahead=barmerge.lookahead_on)
 
 // Overnight Specific Indicators
-ov_dailyAtr   = request.security(syminfo.tickerid, "D", ta.atr(14))
-ov_dailyClose = request.security(syminfo.tickerid, "D", close)
+// FIX: Use [1] with lookahead_on to get YESTERDAY'S confirmed values (Non-Repainting)
+ov_dailyAtr   = request.security(syminfo.tickerid, "D", ta.atr(14)[1], lookahead=barmerge.lookahead_on)
+ov_dailyClose = request.security(syminfo.tickerid, "D", close[1], lookahead=barmerge.lookahead_on)
 ov_atrPct     = (ov_dailyAtr / ov_dailyClose) * 100
-ov_emaDaily   = request.security(syminfo.tickerid, "D", ta.ema(close, ov_lenTrend))
+// Use Yesterday's Daily EMA 200 for Trend Filter (Stable line for whole day)
+ov_emaDaily   = request.security(syminfo.tickerid, "D", ta.ema(close, ov_lenTrend)[1], lookahead=barmerge.lookahead_on)
 
 // Universal Trend Specific Indicators (Manual VWAP to avoid lookahead)
 var float u_vwapSum = 0.0
@@ -462,7 +465,10 @@ isEntryTimeLong = (nyHour == entryHour and nyMin == entryMin)
 longRiskOK = not useDistATR or (distToVWAP <= maxDistATR * atrVal)
 longMomOK = not useMom or (momVal > momThreshLong)
 longAdxOK = not useLongAdx or (adxVal > adxThreshLong and plusDI > minusDI)
-trendLongCond = enable_s1 and canTrade and isEntryTimeLong and (close > vwapVal) and longRiskOK and longMomOK and longAdxOK
+
+// "Primed" condition (Met but not confirmed)
+trendLongPrimed = enable_s1 and canTrade and isEntryTimeLong and (close > vwapVal) and longRiskOK and longMomOK and longAdxOK
+trendLongCond = trendLongPrimed and barstate.isconfirmed
 
 if trendLongCond
     [valLb, valAl] = getTradeInfo("Trend", qtyLongTrend, tierLongTrend, useLeverage)
@@ -498,24 +504,27 @@ orbBreakout = orbEntryMode == "Close" ? orbRangeFormed and close > orbRangeHigh 
 orbGreenRangeOK = not useGreenRange or (orbRangeClose > orbRangeOpen)
 orbTimeOK = t_val < (orbCancelHour * 100 + orbCancelMin)
 
-if enable_s2 and canTrade and orbTimeOK and orbGreenRangeOK and (t_val >= orbEnd)
+orbLongPrimed = enable_s2 and canTrade and orbTimeOK and orbGreenRangeOK and (t_val >= orbEnd) and orbBreakout and (close > vwapVal)
+
+if orbLongPrimed and barstate.isconfirmed
     [valLb, valAl] = getTradeInfo("L-ORB", qtyLongORB, tierLongORB, useLeverage)
     if orbEntryMode == "Close"
-        if orbBreakout and (close > vwapVal)
-            drawLabel(valLb)
-            strategy.entry("Long ORB", strategy.long, qty=qtyLongORB, limit=limitPriceLong, comment="L-ORB (T" + str.tostring(tierLongORB) + ")", alert_message=valAl)
-            orbLongCond := true
+        drawLabel(valLb)
+        strategy.entry("Long ORB", strategy.long, qty=qtyLongORB, limit=limitPriceLong, comment="L-ORB (T" + str.tostring(tierLongORB) + ")", alert_message=valAl)
+        orbLongCond := true
     else
-        if (close > vwapVal)
-            drawLabel(valLb)
-            strategy.entry("Long ORB", strategy.long, qty=qtyLongORB, stop=orbRangeHigh, limit=limitPriceLong, comment="L-ORB (T" + str.tostring(tierLongORB) + ")", alert_message=valAl)
-            orbLongCond := true
+        drawLabel(valLb)
+        strategy.entry("Long ORB", strategy.long, qty=qtyLongORB, stop=orbRangeHigh, limit=limitPriceLong, comment="L-ORB (T" + str.tostring(tierLongORB) + ")", alert_message=valAl)
+        orbLongCond := true
 
 // --- C. SIMPLE SHORT ---
 shortStartVal = shortStartHour * 100 + shortStartMin
 shortEndVal = shortEndHour * 100 + shortEndMin
 inShortLogic = t_val >= shortStartVal and t_val < shortEndVal and close < vwapVal and rsiVal < rsi_thresh and (not use_vix or vixVal < vix_max)
-if enable_s3 and canTrade and inShortLogic
+
+shortPrimed = enable_s3 and canTrade and inShortLogic
+
+if shortPrimed and barstate.isconfirmed
     [valLb, valAl] = getTradeInfo("Short", qtyShort, tierShort, useLeverage)
     drawLabel(valLb)
     strategy.entry("Short", strategy.short, qty=qtyShort, limit=limitPriceShort, comment="Short (T" + str.tostring(tierShort) + ")", alert_message=valAl)
@@ -550,18 +559,18 @@ so_vwapOK = not so_useVwapFilter or (close < vwapVal)
 so_redRangeOK = not so_useRedRange or (so_rangeClose < so_rangeOpen)
 so_timeOK = t_val < (so_cancelHour * 100 + so_cancelMin)
 
-if enable_s4 and canTrade and so_timeOK and so_redRangeOK and (t_val >= so_orbEnd)
+so_Primed = enable_s4 and canTrade and so_timeOK and so_redRangeOK and (t_val >= so_orbEnd) and so_breakout and so_vwapOK
+
+if so_Primed and barstate.isconfirmed
     [valLb, valAl] = getTradeInfo("S-ORB", qtyShortOrb, tierShortOrb, useLeverage)
     if so_entryMode == "Close"
-        if so_breakout and so_vwapOK
-            drawLabel(valLb)
-            strategy.entry("Short ORB", strategy.short, qty=qtyShortOrb, limit=limitPriceShort, comment="S-ORB (T" + str.tostring(tierShortOrb) + ")", alert_message=valAl)
-            shortOrbCond := true
+        drawLabel(valLb)
+        strategy.entry("Short ORB", strategy.short, qty=qtyShortOrb, limit=limitPriceShort, comment="S-ORB (T" + str.tostring(tierShortOrb) + ")", alert_message=valAl)
+        shortOrbCond := true
     else
-        if (close < vwapVal)
-            drawLabel(valLb)
-            strategy.entry("Short ORB", strategy.short, qty=qtyShortOrb, stop=so_rangeLow, limit=limitPriceShort, comment="S-ORB (T" + str.tostring(tierShortOrb) + ")", alert_message=valAl)
-            shortOrbCond := true
+        drawLabel(valLb)
+        strategy.entry("Short ORB", strategy.short, qty=qtyShortOrb, stop=so_rangeLow, limit=limitPriceShort, comment="S-ORB (T" + str.tostring(tierShortOrb) + ")", alert_message=valAl)
+        shortOrbCond := true
 
 // --- E. OVERNIGHT DRIFT ---
 ov_inDate   = year >= ov_startYear
@@ -570,16 +579,17 @@ ov_trendOk = not ov_useTrend or close > ov_emaDaily
 ov_dayOk   = not ov_skipThu or dayofweek != dayofweek.thursday
 ov_volOk   = not ov_useVol or ov_atrPct < ov_maxAtrPct
 
-if enable_s5 and canTrade and ovEntryTime and ov_inDate
-    if ov_trendOk and ov_dayOk and ov_volOk
-        string ov_comment = "Drift (T" + str.tostring(tierOvernight) + ")"
-        float slPriceOv = close * (1 - ov_slPct / 100)
-        float tpPriceOv = close * (1 + ov_tpPct / 100)
-        [ovLb, ovAl] = getTradeInfo("Drift", qtyOvernight, tierOvernight, false)
-        drawLabel(ovLb)
-        strategy.entry("Overnight", strategy.long, qty=qtyOvernight, comment=ov_comment, alert_message=ovAl)
-        strategy.exit("Bracket Ov", "Overnight", stop=slPriceOv, limit=tpPriceOv)
-        ovLongCond := true
+ov_Primed = enable_s5 and canTrade and ovEntryTime and ov_inDate and ov_trendOk and ov_dayOk and ov_volOk
+
+if ov_Primed and barstate.isconfirmed
+    string ov_comment = "Drift (T" + str.tostring(tierOvernight) + ")"
+    float slPriceOv = close * (1 - ov_slPct / 100)
+    float tpPriceOv = close * (1 + ov_tpPct / 100)
+    [ovLb, ovAl] = getTradeInfo("Drift", qtyOvernight, tierOvernight, false)
+    drawLabel(ovLb)
+    strategy.entry("Overnight", strategy.long, qty=qtyOvernight, comment=ov_comment, alert_message=ovAl)
+    strategy.exit("Bracket Ov", "Overnight", stop=slPriceOv, limit=tpPriceOv)
+    ovLongCond := true
 
 // ==========================================
 // 10. STRATEGY 6: UNIVERSAL TREND EDGE
@@ -594,16 +604,17 @@ u_isConfirmed = barstate.isconfirmed // Strict Entry
 u_longTrigger  = (close > u_upperBand) and (close > open) and (u_regimeVal > u_threshHurst) and (close > u_dailyVwap)
 u_shortTrigger = (close < u_lowerBand) and (close < open) and (u_regimeVal > u_threshHurst) and (close < u_dailyVwap)
 
-if enable_s6 and canTrade and u_inSession and u_isConfirmed
-    if u_longTrigger
-        // Enter Long
+u_LongPrimed  = enable_s6 and canTrade and u_inSession and u_longTrigger
+u_ShortPrimed = enable_s6 and canTrade and u_inSession and u_shortTrigger
+
+if barstate.isconfirmed
+    if u_LongPrimed
         [uLb, uAl] = getTradeInfo("Univ-L", qtyUniv, tierUniv, false)
         drawLabel(uLb)
         strategy.entry("Univ Long", strategy.long, qty=qtyUniv, comment="Univ-L (T" + str.tostring(tierUniv) + ")", alert_message=uAl)
         u_tradeSL := close - (u_slAtrMult * atrVal)
         u_tradeTP := close + (u_tpAtrMult * atrVal)
-    else if u_shortTrigger
-        // Enter Short
+    else if u_ShortPrimed
         [uLb, uAl] = getTradeInfo("Univ-S", qtyUniv, tierUniv, false)
         drawLabel(uLb)
         strategy.entry("Univ Short", strategy.short, qty=qtyUniv, comment="Univ-S (T" + str.tostring(tierUniv) + ")", alert_message=uAl)
@@ -672,3 +683,119 @@ plotshape(trendLongCond, "Trend Entry", shape.triangleup, location.belowbar, col
 plotshape(orbLongCond, "ORB Entry", shape.arrowup, location.belowbar, color.lime, size=size.small)
 plotshape(ovLongCond, "Drift Entry", shape.diamond, location.belowbar, color.white, size=size.small)
 plot(strategy.position_size != 0 ? plotSL : na, "Dynamic Stop Loss", color=color.yellow, style=plot.style_linebr, linewidth=2)
+
+// ==========================================
+// 12. UI DASHBOARD
+// ==========================================
+var table statusTable = table.new(position.top_right, 2, 10, bgcolor=color.black, border_width=1)
+
+// Determine Status
+string statusText = "INACTIVE"
+color statusColor = color.gray
+string detailsText = "Waiting..."
+string slText      = "---"
+string typeText    = "---"
+string qtyText     = "---"
+string eqText      = "---"
+
+// Check Primed (Conditions met intra-bar)
+bool isPrimed = trendLongPrimed or orbLongPrimed or shortPrimed or so_Primed or ov_Primed or u_LongPrimed or u_ShortPrimed
+
+// Projected Stop Loss & Qty Calculation (for Primed State)
+float projSL = na
+float projQty = 0.0
+string trigType = "CLOSE" // Default to Close-Only
+
+if trendLongPrimed
+    projSL := close
+    projQty := qtyLongTrend
+    trigType := "WAIT CLOSE"
+if orbLongPrimed
+    projSL := orbRangeHigh
+    projQty := qtyLongORB
+    trigType := orbEntryMode == "Close" ? "WAIT CLOSE" : "STOP ORDER"
+if shortPrimed
+    projSL := close * (1 + 0.01)
+    projQty := qtyShort
+    trigType := "WAIT CLOSE"
+if so_Primed
+    projSL := so_rangeLow
+    projQty := qtyShortOrb
+    trigType := so_entryMode == "Close" ? "WAIT CLOSE" : "STOP ORDER"
+if ov_Primed
+    projSL := close * (1 - ov_slPct / 100)
+    projQty := qtyOvernight
+    trigType := "WAIT CLOSE"
+if u_LongPrimed
+    projSL := close - (u_slAtrMult * atrVal)
+    projQty := qtyUniv
+    trigType := "WAIT CLOSE"
+if u_ShortPrimed
+    projSL := close + (u_slAtrMult * atrVal)
+    projQty := qtyUniv
+    trigType := "WAIT CLOSE"
+
+if strategy.position_size != 0
+    statusText := "ACTIVE"
+    statusColor := color.green
+    float openP = strategy.opentrades.entry_price(strategy.opentrades - 1)
+    float curPnL = (close - openP) * strategy.position_size * 20
+    detailsText := "$" + str.tostring(curPnL, "#.00")
+    
+    // Active SL
+    if not na(plotSL)
+        slText := str.tostring(plotSL, "#.2")
+    else
+        slText := "Dynamic"
+        
+    typeText := "IN TRADE"
+    
+    // Active Qty & Eq
+    qtyText := str.tostring(math.abs(strategy.position_size))
+    float posVal = math.abs(strategy.position_size) * close * 20 // Approx NQ Value? Or just Price for Futures margin?
+    // Using simple Close * Qty implies Notional Value. 
+    // Contract Value = Price * 20? No, Strategy settings say contract_value=20 but typically for NQ it's $20/pt.
+    // Pine 'strategy.position_size' is contracts. 
+    // Equity % = (Margin / Equity)? Or (Notional / Equity)? Usually Notional.
+    // Let's use Notional = Qty * Price.
+    float notional = math.abs(strategy.position_size) * close
+    float eqPct = (notional / strategy.equity) * 100
+    eqText := str.tostring(eqPct, "#.1") + "%"
+    
+else if isPrimed
+    statusText := "PRIMED"
+    statusColor := color.yellow
+    detailsText := "Signal Pending"
+    
+    if not na(projSL)
+        slText := str.tostring(projSL, "#.2")
+    
+    typeText := trigType
+    
+    // Projected Qty
+    qtyText := str.tostring(projQty)
+    float projNotional = projQty * close
+    float projEqPct = (projNotional / strategy.equity) * 100
+    eqText := str.tostring(projEqPct, "#.1") + "%"
+
+// Render
+if barstate.islastconfirmedhistory or barstate.isrealtime
+    // Header
+    table.cell(statusTable, 0, 0, "STATUS", text_color=color.white, bgcolor=color.gray, text_size=size.small)
+    table.cell(statusTable, 0, 1, statusText, text_color=color.black, bgcolor=statusColor, text_size=size.small)
+    
+    // Trigger Type
+    table.cell(statusTable, 0, 2, "TRIGGER", text_color=color.white, bgcolor=color.gray, text_size=size.small)
+    table.cell(statusTable, 0, 3, typeText, text_color=color.white, bgcolor=color.black, text_size=size.small)
+    
+    // SL
+    table.cell(statusTable, 0, 4, "STOP LOSS", text_color=color.white, bgcolor=color.gray, text_size=size.small)
+    table.cell(statusTable, 0, 5, slText, text_color=color.yellow, bgcolor=color.black, text_size=size.small)
+
+    // Qty
+    table.cell(statusTable, 0, 6, "CONTRACTS", text_color=color.white, bgcolor=color.gray, text_size=size.small)
+    table.cell(statusTable, 0, 7, qtyText, text_color=color.teal, bgcolor=color.black, text_size=size.small)
+
+    // Equity %
+    table.cell(statusTable, 0, 8, "EQUITY %", text_color=color.white, bgcolor=color.gray, text_size=size.small)
+    table.cell(statusTable, 0, 9, eqText, text_color=color.teal, bgcolor=color.black, text_size=size.small)
