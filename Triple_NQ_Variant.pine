@@ -290,12 +290,18 @@ u_momPoints = math.abs(close - close[u_lenBand]) // For Universal Momentum Scali
 // VISUALS: GLOBAL TRACKERS
 // ==========================================
 var float plotSL = na
+var float plotTP = na
 var float plotEntry = na
 if strategy.position_size == 0
     plotSL := na
+    plotTP := na
     plotEntry := na
 else
     plotEntry := strategy.opentrades.entry_price(strategy.opentrades - 1)
+
+// ... [Skipping Scaling/Calc Logic] ...
+
+
 
 // ==========================================
 // 8. SCALING CALCULATORS (TIER ONLY)
@@ -585,6 +591,11 @@ if ov_Primed and barstate.isconfirmed
     string ov_comment = "Drift (T" + str.tostring(tierOvernight) + ")"
     float slPriceOv = close * (1 - ov_slPct / 100)
     float tpPriceOv = close * (1 + ov_tpPct / 100)
+    
+    // Update Global Visuals
+    plotSL := slPriceOv
+    plotTP := tpPriceOv
+
     [ovLb, ovAl] = getTradeInfo("Drift", qtyOvernight, tierOvernight, false)
     drawLabel(ovLb)
     strategy.entry("Overnight", strategy.long, qty=qtyOvernight, comment=ov_comment, alert_message=ovAl)
@@ -683,11 +694,12 @@ plotshape(trendLongCond, "Trend Entry", shape.triangleup, location.belowbar, col
 plotshape(orbLongCond, "ORB Entry", shape.arrowup, location.belowbar, color.lime, size=size.small)
 plotshape(ovLongCond, "Drift Entry", shape.diamond, location.belowbar, color.white, size=size.small)
 plot(strategy.position_size != 0 ? plotSL : na, "Dynamic Stop Loss", color=color.yellow, style=plot.style_linebr, linewidth=2)
+plot(strategy.position_size != 0 ? plotTP : na, "Dynamic Take Profit", color=color.purple, style=plot.style_linebr, linewidth=2)
 
 // ==========================================
 // 12. UI DASHBOARD
 // ==========================================
-var table statusTable = table.new(position.top_right, 2, 10, bgcolor=color.black, border_width=1)
+var table statusTable = table.new(position.top_right, 2, 12, bgcolor=color.black, border_width=1)
 
 // Determine Status
 string statusText = "INACTIVE"
@@ -697,6 +709,7 @@ string slText      = "---"
 string typeText    = "---"
 string qtyText     = "---"
 string eqText      = "---"
+string exitText    = "---"
 
 // Check Primed (Conditions met intra-bar)
 bool isPrimed = trendLongPrimed or orbLongPrimed or shortPrimed or so_Primed or ov_Primed or u_LongPrimed or u_ShortPrimed
@@ -710,30 +723,37 @@ if trendLongPrimed
     projSL := close
     projQty := qtyLongTrend
     trigType := "WAIT CLOSE"
+    exitText := str.format("{0,number,00}:{1,number,00}", trendExitHour, trendExitMin)
 if orbLongPrimed
     projSL := orbRangeHigh
     projQty := qtyLongORB
     trigType := orbEntryMode == "Close" ? "WAIT CLOSE" : "STOP ORDER"
+    exitText := "Dynamic"
 if shortPrimed
     projSL := close * (1 + 0.01)
     projQty := qtyShort
     trigType := "WAIT CLOSE"
+    exitText := str.format("{0,number,00}:{1,number,00}", shortEndHour, shortEndMin)
 if so_Primed
     projSL := so_rangeLow
     projQty := qtyShortOrb
     trigType := so_entryMode == "Close" ? "WAIT CLOSE" : "STOP ORDER"
+    exitText := "Dynamic"
 if ov_Primed
     projSL := close * (1 - ov_slPct / 100)
     projQty := qtyOvernight
     trigType := "WAIT CLOSE"
+    exitText := str.format("{0,number,00}:{1,number,00}", ov_exitH, ov_exitM)
 if u_LongPrimed
     projSL := close - (u_slAtrMult * atrVal)
     projQty := qtyUniv
     trigType := "WAIT CLOSE"
+    exitText := "Dynamic" // Univ uses ATR targets
 if u_ShortPrimed
     projSL := close + (u_slAtrMult * atrVal)
     projQty := qtyUniv
     trigType := "WAIT CLOSE"
+    exitText := "Dynamic" // Univ uses ATR targets
 
 if strategy.position_size != 0
     statusText := "ACTIVE"
@@ -752,15 +772,20 @@ if strategy.position_size != 0
     
     // Active Qty & Eq
     qtyText := str.tostring(math.abs(strategy.position_size))
-    float posVal = math.abs(strategy.position_size) * close * 20 // Approx NQ Value? Or just Price for Futures margin?
-    // Using simple Close * Qty implies Notional Value. 
-    // Contract Value = Price * 20? No, Strategy settings say contract_value=20 but typically for NQ it's $20/pt.
-    // Pine 'strategy.position_size' is contracts. 
-    // Equity % = (Margin / Equity)? Or (Notional / Equity)? Usually Notional.
-    // Let's use Notional = Qty * Price.
     float notional = math.abs(strategy.position_size) * close
     float eqPct = (notional / strategy.equity) * 100
     eqText := str.tostring(eqPct, "#.1") + "%"
+    
+    // Exit Logic Lookup
+    string entryId = strategy.opentrades.entry_id(strategy.opentrades - 1)
+    if entryId == "Long Trend"
+        exitText := str.format("{0,number,00}:{1,number,00}", trendExitHour, trendExitMin)
+    else if entryId == "Overnight"
+        exitText := str.format("{0,number,00}:{1,number,00}", ov_exitH, ov_exitM)
+    else if entryId == "Short"
+        exitText := str.format("{0,number,00}:{1,number,00}", shortEndHour, shortEndMin)
+    else
+        exitText := "Dynamic"
     
 else if isPrimed
     statusText := "PRIMED"
@@ -799,3 +824,7 @@ if barstate.islastconfirmedhistory or barstate.isrealtime
     // Equity %
     table.cell(statusTable, 0, 8, "EQUITY %", text_color=color.white, bgcolor=color.gray, text_size=size.small)
     table.cell(statusTable, 0, 9, eqText, text_color=color.teal, bgcolor=color.black, text_size=size.small)
+
+    // Exit Time
+    table.cell(statusTable, 0, 10, "EXIT TIME", text_color=color.white, bgcolor=color.gray, text_size=size.small)
+    table.cell(statusTable, 0, 11, exitText, text_color=color.white, bgcolor=color.black, text_size=size.small)
